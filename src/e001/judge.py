@@ -119,10 +119,11 @@ def judge_candidate(cfg: Config, graphs: Dict[str, Graph], align: Alignment,
                  "answers_joint": [], "answers_en": [], "answers_fr": [],
                  "unresolved_branches": 0, "alt_path_hits": [],
                  "alt_check_status": "not_run", "alt_check_truncated": False,
-                 "consistency_error": None}
+                 "unresolved_kind": None, "consistency_error": None}
 
     if root is None:
         out["state"] = "unresolved"
+        out["unresolved_kind"] = "root_not_resolved"
         out["reason"] = "根实体未通过参考映射解析到起始语言图"
         return out
 
@@ -179,6 +180,7 @@ def judge_candidate(cfg: Config, graphs: Dict[str, Graph], align: Alignment,
     if not a_star:
         # 联合仍无证据：区分「确实不足」与「映射缺失导致的未决」
         out["state"] = "unresolved" if unresolved else "insufficient"
+        out["unresolved_kind"] = "mapping_missing" if unresolved else None
         out["reason"] = ("联合查询无答案且有映射缺失分支" if unresolved
                          else "联合查询无答案")
         return out
@@ -244,8 +246,16 @@ def judge_candidate(cfg: Config, graphs: Dict[str, Graph], align: Alignment,
     elif out["partial_single_answers"]:
         out["state"] = "completion"
         out["reason"] = "各单图均不能给出完整 A*，但至少一个单图给出部分答案"
+    elif any_truncated:
+        # 判 strict_join 依据的是「替代路径穷举未命中」这一**否定**结论。
+        # 穷举被预算截断即表示该检查未完整执行，任务书 §7.5 要求结论只覆盖
+        # 实现且完整执行的规则集，故不得据此断订单图必要——记为未决而非正例。
+        # 注意：命中类结论（single_graph / completion）是存在性证据，不受截断影响。
+        out["state"] = "unresolved"
+        out["unresolved_kind"] = "alt_search_budget_exhausted"
+        out["reason"] = ("A* 非空且各单图结果均为空，但替代路径穷举被预算截断"
+                         "（未完整执行），无法据此确认单图必要，记为未决")
     else:
         out["state"] = "strict_join"
-        out["reason"] = ("A* 非空且各单图结果均为空，替代路径已复核无命中"
-                         + ("（穷举被预算截断，结论不完整）" if any_truncated else ""))
+        out["reason"] = "A* 非空且各单图结果均为空，替代路径已复核完整执行且无命中"
     return out

@@ -40,7 +40,11 @@ def _scan_into(cfg: Config, project_root: str, lang: str,
     stats = {"scanned_files": 0, "scanned_lines": 0, "matched_triples": 0}
     if not remaining:
         return stats
-    prefixes = tuple(f"<{t}>" for t in remaining)
+    # 预筛用具名集合 + 逐行切出主语，逐行成本 O(1)。
+    # 早前用 line.startswith(tuple(prefixes)) 在 subject 上万时会退化成
+    # O(行数 × subject 数)（每行都要试完所有前缀），几十万行乘上万前缀
+    # 会让复核慢到不可用。
+    wrapped = {f"<{t}>" for t in remaining}
     for f in cfg.raw["inputs"]:
         if f["role"] != "fact" or lang not in f["langs"]:
             continue
@@ -54,8 +58,9 @@ def _scan_into(cfg: Config, project_root: str, lang: str,
                 stats["scanned_lines"] += 1
                 if not line or line[0] != "<":
                     continue
-                # 快速预筛：subject 必须出现在行首（C 层短路）
-                if not line.startswith(prefixes):
+                # 快速预筛：subject 必须出现在行首
+                end = line.find(">", 1)
+                if end < 0 or line[:end + 1] not in wrapped:
                     continue
                 t = util.parse_line(line)
                 if t is None:

@@ -36,10 +36,14 @@ def track_a_metrics(cands: List[Dict]) -> Dict:
     """
     valid = [c for c in cands if c.get("syntax_type_valid", True)]
     counts = {s: 0 for s in STATES}
+    unresolved_kinds: Dict[str, int] = {}
     for c in valid:
         st = c.get("state")
         if st in counts:
             counts[st] += 1
+        if st == "unresolved":
+            k = c.get("unresolved_kind") or "unspecified"
+            unresolved_kinds[k] = unresolved_kinds.get(k, 0) + 1
     den = len(valid)
     joint_answerable = counts["strict_join"] + counts["completion"] + counts["single_graph"]
     unfinished = counts["unresolved"]
@@ -55,6 +59,7 @@ def track_a_metrics(cands: List[Dict]) -> Dict:
             counts["strict_join"] + counts["completion"], joint_answerable),
         "R_multi_among_joint_answerable_denominator": joint_answerable,
         "unfinished_unresolved": unfinished,
+        "unresolved_by_kind": unresolved_kinds,
         "verification_coverage": _ratio(den - unfinished, den),
         # 未决项既非正例也非负例：给上下界
         "R_multi_lower_bound_excluding_unresolved": _ratio(

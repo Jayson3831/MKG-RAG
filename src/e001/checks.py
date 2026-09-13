@@ -226,6 +226,41 @@ def check_alt_path_survives_removal(cfg: Config) -> Tuple[bool, str]:
                 f"after={after['state']}({len(after['alt_path_hits'])} hits)")
 
 
+def check_truncated_alt_search_not_strict_join(cfg: Config) -> Tuple[bool, str]:
+    """替代路径穷举被预算截断时不得判 strict_join。
+
+    strict_join 依据的是「穷举未命中」这一否定结论，而截断说明该检查未完整
+    执行（任务书 §7.5：结论只覆盖实现且完整执行的规则集）。本检查用同一张图
+    对比两种预算：截断 -> unresolved，预算充足 -> strict_join，证明分类确实
+    随检查是否完整执行而变，而不是无条件放宽。
+    """
+    en = _typed(Graph.from_triples("en", [
+        (FILM, "dbo:director", PERSON_EN, "iri")]), FILM, "dbo:Film")
+    fr = _typed(_typed(Graph.from_triples("fr", [
+        (PERSON_FR, "dbo:birthPlace", PLACE_FR, "iri")]),
+        PERSON_FR, "dbo:Person"), PLACE_FR, "dbo:Place")
+    graphs = {"en": en, "fr": fr}
+    align = _base_align()
+    ri = {"en": FILM, "fr": f"{FR}SomeFilm"}
+    t = _template(["dbo:director", "dbo:birthPlace"], ["en", "fr"])
+
+    rc = cfg.raw["alternative_paths"]["relational_chain_search"]
+    saved = (rc["max_expansions"], rc["max_node_visits"])
+    rc["max_expansions"], rc["max_node_visits"] = 0, 0       # 立即截断
+    try:
+        cut = _judge(cfg, graphs, align, t, ri)
+    finally:
+        rc["max_expansions"], rc["max_node_visits"] = saved
+    full = _judge(cfg, graphs, align, t, ri)
+
+    ok = (cut["state"] == "unresolved"
+          and cut["unresolved_kind"] == "alt_search_budget_exhausted"
+          and cut["alt_check_status"] == "executed_truncated"
+          and full["state"] == "strict_join")
+    return ok, (f"截断预算={cut['state']}({cut['unresolved_kind']}) "
+                f"充足预算={full['state']}")
+
+
 def check_consistency_error_detected(cfg: Config) -> Tuple[bool, str]:
     """单图答案不属于 A* 时触发一致性错误，不继续发布必要率。"""
     en = Graph.from_triples("en", [
@@ -252,6 +287,8 @@ ALL_CHECKS = [
     ("track_denominators_independent", check_track_denominators_independent),
     ("alt_path_flips_strict_join", check_alt_path_flips_strict_join),
     ("alt_path_survives_removal", check_alt_path_survives_removal),
+    ("truncated_alt_search_not_strict_join",
+     check_truncated_alt_search_not_strict_join),
     ("consistency_error_detected", check_consistency_error_detected),
 ]
 

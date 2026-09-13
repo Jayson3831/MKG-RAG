@@ -126,6 +126,7 @@ def certificates(cfg: Config, results: List[Dict]) -> List[Dict]:
             },
             "partial_single_answers": r.get("partial_single_answers", []),
             "unresolved_branches": r.get("unresolved_branches", 0),
+            "unresolved_kind": r.get("unresolved_kind"),
             "consistency_error": r.get("consistency_error"),
             "reason": r.get("reason"),
             "source_coordinates": ("每条 joint_evidence/single_evidence 记录均带 "
