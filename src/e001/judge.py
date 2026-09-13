@@ -119,7 +119,10 @@ def judge_candidate(cfg: Config, graphs: Dict[str, Graph], align: Alignment,
                  "answers_joint": [], "answers_en": [], "answers_fr": [],
                  "unresolved_branches": 0, "alt_path_hits": [],
                  "alt_check_status": "not_run", "alt_check_truncated": False,
-                 "unresolved_kind": None, "consistency_error": None}
+                 "unresolved_kind": None, "consistency_error": None,
+                 # 提前返回的分支（未决/冲突）也必须带该字段，否则账本字段缺失，
+                 # 下游按字段存在性区分路径就会误判。
+                 "partial_single_answers": []}
 
     if root is None:
         out["state"] = "unresolved"
@@ -279,6 +282,11 @@ def judge_candidate(cfg: Config, graphs: Dict[str, Graph], align: Alignment,
         out["reason"] = ("A* 非空且各单图结果均为空，但替代路径穷举被预算截断"
                          "（未完整执行），无法据此确认单图必要，记为未决")
     else:
+        # 到达此分支必然满足 singles_all_empty：若某单图答案非空而它与 A* 无交集，
+        # 则该答案不属于 A*，上面的一致性检查已先行判为冲突并返回。这里不重复
+        # 判一次（否则是永不执行的死代码），但 §7.7/§218 把「各单图为空」写成
+        # 严格连接的必要条件，checks.check_strict_join_requires_empty_singles
+        # 以可观测方式守住该不变量：一旦一致性检查的参考集被改动，它会失败。
         out["state"] = "strict_join"
         out["reason"] = "A* 非空且各单图结果均为空，替代路径已复核完整执行且无命中"
     return out

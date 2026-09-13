@@ -310,6 +310,33 @@ def check_truncated_alt_search_not_strict_join(cfg: Config) -> Tuple[bool, str]:
                 f"充足预算={full['state']}")
 
 
+def check_strict_join_requires_empty_singles(cfg: Config) -> Tuple[bool, str]:
+    """§7.7/§218：各单图为空是严格连接的必要条件，单图有答案就不得判严格连接。
+
+    构造单图有答案、但该答案与 A* 无交集的情形（en 给出 Nowhere，联合给出
+    PLACE_FR）。三分法在它身上失效——既非「单图完整回答」也非「部分答案」——
+    此时按 §7.8 应触发一致性错误待复核，绝不能因为「单图答案不属于 A*」就
+    落到 else 分支变成严格连接。
+
+    这条检查以**可观测状态**守住该前提：若日后有人改动一致性检查的参考集
+    （例如改用并集语义答案集），这类样本会立刻变成 strict_join，检查随即失败，
+    而不是静默产出假正例。
+    """
+    en = Graph.from_triples("en", [
+        (FILM, "dbo:director", PERSON_EN, "iri"),
+        (PERSON_EN, "dbo:birthPlace", f"{EN}Nowhere", "iri")])
+    fr = Graph.from_triples("fr", [
+        (PERSON_FR, "dbo:birthPlace", PLACE_FR, "iri")])
+    r = _judge(cfg, {"en": en, "fr": fr}, _base_align(),
+               _template(["dbo:director", "dbo:birthPlace"], ["en", "fr"]),
+               {"en": FILM, "fr": f"{FR}SomeFilm"})
+    singles_nonempty = bool(r["answers_en"]) or bool(r["answers_fr"])
+    ok = (singles_nonempty and r["state"] != "strict_join"
+          and r["state"] in ("conflict_invalid", "unresolved"))
+    return ok, (f"state={r['state']} 单图有答案={singles_nonempty} "
+                f"partial={r['partial_single_answers']}")
+
+
 def check_consistency_error_detected(cfg: Config) -> Tuple[bool, str]:
     """单图答案不属于 A* 时触发一致性错误，不继续发布必要率。"""
     en = Graph.from_triples("en", [
@@ -340,6 +367,8 @@ ALL_CHECKS = [
     ("alt_probe_prefilter_keeps_hits", check_alt_probe_prefilter_keeps_hits),
     ("truncated_alt_search_not_strict_join",
      check_truncated_alt_search_not_strict_join),
+    ("strict_join_requires_empty_singles",
+     check_strict_join_requires_empty_singles),
     ("consistency_error_detected", check_consistency_error_detected),
 ]
 
