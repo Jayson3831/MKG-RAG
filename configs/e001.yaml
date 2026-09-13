@@ -1,0 +1,274 @@
+# E001 冻结配置：DBpedia-en/fr 数据审计与问题可构造性
+#
+# 本文件在正式统计前冻结。release、文件清单、范围、模板、采样规则、推理规则
+# 与预算一经提交即不再修改；如需变更必须使用新的运行编号，并注明结论只适用于
+# 新配置，不得以「先看结果再回头调口径」的方式修改。
+#
+# 配置哈希由 scripts/run_e001.py 计算并写入运行目录 manifest。
+
+experiment: E001
+config_version: "1.0.0"
+tz: Asia/Shanghai
+
+# ---------------------------------------------------------------- 输入与范围
+release:
+  id: "2022.03.01"
+  base_url: "https://downloads.dbpedia.org/repo/dbpedia"
+  # 同一 release 内各文件 Last-Modified 不同，逐文件记录；相同 release 不等于
+  # 内容来自同一时刻（验证计划 §2.1）。
+  languages: [en, fr]
+  note: >
+    选用 2022.03.01：2022.09.01 / 2022.12.01 无 fr。2016-10 虽含完整
+    interlanguage links，但源 dump 过旧，按用户意见排除。
+
+# 输入清单。bytes 为 2026-09-12 实测 Content-Length，sha256 由 prepare 填充并
+# 与运行目录 manifest 核对；不一致即中止，不静默继续。
+inputs:
+  - id: mappingbased_objects
+    relpath: "mappings/mappingbased-objects/2022.03.01/mappingbased-objects_lang={lang}.ttl.bz2"
+    langs: [en, fr]
+    bytes: {en: 185854708, fr: 56867832}
+    role: fact
+  - id: mappingbased_literals
+    relpath: "mappings/mappingbased-literals/2022.03.01/mappingbased-literals_lang={lang}.ttl.bz2"
+    langs: [en, fr]
+    bytes: {en: 148712375, fr: 64166853}
+    role: fact
+  - id: instance_types_specific
+    relpath: "mappings/instance-types/2022.03.01/instance-types_lang={lang}_specific.ttl.bz2"
+    langs: [en, fr]
+    bytes: {en: 45294978, fr: 14966515}
+    role: types
+  - id: instance_types_transitive
+    relpath: "mappings/instance-types/2022.03.01/instance-types_lang={lang}_transitive.ttl.bz2"
+    langs: [en, fr]
+    bytes: {en: 147134163, fr: 42908705}
+    role: types
+  - id: labels
+    relpath: "generic/labels/2022.03.01/labels_lang={lang}.ttl.bz2"
+    langs: [en, fr]
+    bytes: {en: 164152750, fr: 41995219}
+    role: labels
+  - id: sameas_all_wikis
+    relpath: "wikidata/sameas-all-wikis/2022.03.01/sameas-all-wikis.ttl.bz2"
+    langs: []          # 不分语言，单文件
+    bytes: {_single: 716584158}
+    role: alignment
+
+# 参考映射来源。interlanguage-links 在 2020-2022 各 release 仅约 0.8 MB
+# （2022.03.01 en→fr 仅 4969 条），覆盖不足以支撑约 1000 个共享实体抽样，
+# 故不使用；改用 sameas-all-wikis 的 QID 对齐。
+alignment:
+  source: sameas_all_wikis
+  predicate: "http://www.w3.org/2002/07/owl#sameAs"
+  qid_ns: "http://wikidata.dbpedia.org/resource/"
+  # 语言资源命名：en 为 http://dbpedia.org/resource/，fr 为 http://fr.dbpedia.org/resource/
+  resource_ns: {en: "http://dbpedia.org/resource/", fr: "http://fr.dbpedia.org/resource/"}
+  # 以下前缀的资源不计入答案事实（验证计划 §2.3）
+  excluded_prefixes: ["Category:", "Catégorie:", "Template:", "Modèle:", "List_of", "Liste_de"]
+
+evaluation_scope:
+  # 完整评测图 = 该语言 mapping-based 抽取的全部实体与事实；不截断出边。
+  full_graph: true
+  allow_topic_subset: false   # 本机资源充足，不用主题子图缩小范围
+  # 单图必要性复核在声明的完整评测图内进行（验证计划 §2.1）
+
+# ------------------------------------------------------------------ 关系白名单
+# 仅使用共享 ontology 属性（完整 URI），本地 infobox 属性属 E004，本轮不引入。
+namespaces:
+  dbo: "http://dbpedia.org/ontology/"
+  rdf: "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  rdfs: "http://www.w3.org/2000/01/rdf-schema#"
+  owl: "http://www.w3.org/2002/07/owl#"
+  xsd: "http://www.w3.org/2001/XMLSchema#"
+
+relations:
+  # 用于模板跳转的关系；值为期望的客体类型（来自 instance_types_transitive）
+  dbo:director:        {object_class: dbo:Person}
+  dbo:starring:        {object_class: dbo:Person}
+  dbo:author:          {object_class: dbo:Person}
+  dbo:musicComposer:   {object_class: dbo:Person}
+  dbo:producer:        {object_class: dbo:Person}
+  dbo:screenwriter:    {object_class: dbo:Person}
+  dbo:birthPlace:      {object_class: dbo:Place}
+  dbo:deathPlace:      {object_class: dbo:Place}
+  dbo:country:         {object_class: dbo:Country}
+  dbo:capital:         {object_class: dbo:Place}
+  dbo:almaMater:       {object_class: dbo:Organisation}
+  dbo:location:        {object_class: dbo:Place}
+  dbo:headquarters:    {object_class: dbo:Place}
+  dbo:foundationPlace: {object_class: dbo:Place}
+  dbo:parentCompany:   {object_class: dbo:Organisation}
+  dbo:subsidiary:      {object_class: dbo:Organisation}
+  dbo:region:          {object_class: dbo:Place}
+  dbo:isPartOf:        {object_class: dbo:Place}
+  dbo:series:          {object_class: dbo:Work}
+  dbo:network:         {object_class: dbo:Organisation}
+  dbo:occupation:      {object_class: dbo:Person}
+
+# 允许的替代证据路径规则（WP5 / 任务书 §7.5）。
+# 结论只覆盖「实现且完整执行」的规则集；未实现的检查必须显式标记
+# not_implemented，不能以空白字段声称已排除所有路径。
+alternative_paths:
+  # 主检查：在关系白名单上穷举所有替代链。
+  # 对模板 chain=[r1..rk]，枚举白名单关系上所有长度 ≤ k + extra_hops、
+  # 起点相同、终点类型与模板目标类型兼容的链，并在每个单图内求解。
+  # 任一单图能经任一替代链得到答案，即判为单图可回答。
+  # 范围明确：穷举限于已声明白名单与长度上限，不外推为自然语言层面的穷尽。
+  relational_chain_search:
+    enabled: true
+    extra_hops: 1              # 相对模板长度允许的额外跳数
+    max_chain_len: 4           # 绝对上限
+    require_type_compatible: true
+    # 中间节点不得是字面量；类型来自 instance_types_transitive
+    # 穷举预算：前缀剪枝 BFS 的节点展开上限。超限即截断并如实标记
+    # alt_check_status=executed_truncated，不声称已排除全部替代路径。
+    max_expansions: 200000
+    on_budget_exhausted: record_incomplete
+  # 等价/逆关系由上面的穷举自动涵盖（同长度替换即等价/逆向重写），
+  # 因此不再单独硬编码等价表，避免「声明了但未真正执行」。
+  equivalent_property_rewrite:
+    enabled: false
+    status: not_implemented
+    limitation: >
+      未加载 DBpedia ontology 文件，无法自动读取 owl:equivalentProperty /
+      owl:inverseOf。等价与逆关系仅覆盖白名单内谓词的同长度替换，
+      白名单之外的语义等价关系未检查。
+  natural_language_inference:
+    enabled: false
+    status: not_implemented
+    limitation: 未实现自然语言层面的等价推理。
+  temporal_path:
+    enabled: false
+    status: not_implemented
+    limitation: 未实现时间维度路径（属 E006）。
+
+# --------------------------------------------------------------- 模板（冻结）
+# 结构：chain 为有向跳序列，每跳声明谓词；split 指定第 k 跳由哪个图提供。
+# 2 跳 = 两图各提供一段；3 跳 = 中间跳来自其中一个图，另两跳来自另一个图。
+templates:
+  - id: T1_film_director_birthplace
+    hops: 2
+    chain: [dbo:director, dbo:birthPlace]
+    root_class: dbo:Film
+    split: [en, fr]          # hop1 取 en，hop2 取 fr
+    question: "{root_label} 的导演出生在哪里？"
+  - id: T2_film_starring_birthplace
+    hops: 2
+    chain: [dbo:starring, dbo:birthPlace]
+    root_class: dbo:Film
+    split: [en, fr]
+    question: "{root_label} 的主演出出生在哪里？"
+  - id: T3_book_author_birthplace
+    hops: 2
+    chain: [dbo:author, dbo:birthPlace]
+    root_class: dbo:Book
+    split: [en, fr]
+    question: "{root_label} 的作者出生在哪里？"
+  - id: T4_org_country_capital
+    hops: 2
+    chain: [dbo:country, dbo:capital]
+    root_class: dbo:Organisation
+    split: [en, fr]
+    question: "{root_label} 所在国家的首都是哪里？"
+  - id: T5_person_birthplace_country
+    hops: 2
+    chain: [dbo:birthPlace, dbo:country]
+    root_class: dbo:Person
+    split: [en, fr]
+    question: "{root_label} 的出生地属于哪个国家？"
+  - id: T6_org_parentcompany_country
+    hops: 2
+    chain: [dbo:parentCompany, dbo:country]
+    root_class: dbo:Organisation
+    split: [en, fr]
+    question: "{root_label} 母公司的所在国是哪里？"
+  - id: T7_film_director_birthplace_country
+    hops: 3
+    chain: [dbo:director, dbo:birthPlace, dbo:country]
+    root_class: dbo:Film
+    split: [en, en, fr]      # hop1/hop2 取 en，hop3 取 fr
+    question: "{root_label} 的导演出生在哪个国家？"
+  - id: T8_book_author_almaMater_country
+    hops: 3
+    chain: [dbo:author, dbo:almaMater, dbo:country]
+    root_class: dbo:Book
+    split: [en, en, fr]
+    question: "{root_label} 的作者的母校位于哪个国家？"
+  - id: T9_film_starring_birthplace_country
+    hops: 3
+    chain: [dbo:starring, dbo:birthPlace, dbo:country]
+    root_class: dbo:Film
+    split: [en, en, fr]
+    question: "{root_label} 的主演出出生在哪个国家？"
+  - id: T10_org_country_capital_country
+    hops: 3
+    chain: [dbo:country, dbo:capital, dbo:country]
+    root_class: dbo:Organisation
+    split: [en, en, fr]
+    question: "{root_label} 所在国家的首都属于哪个国家？"
+
+# 集合补全子集：同一跳在两个图都可能提供部分答案，答案集合取并集。
+completion_templates:
+  - id: C1_film_country_union
+    hops: 1
+    chain: [dbo:country]
+    root_class: dbo:Film
+    question: "{root_label} 与哪些国家相关？"
+  - id: C2_person_occupation_union
+    hops: 1
+    chain: [dbo:occupation]
+    root_class: dbo:Person
+    question: "{root_label} 的职业有哪些？"
+
+# ------------------------------------------------------------------ 抽样规则
+sampling:
+  seed: 42
+  entity_target: 1000
+  # 分层：按根实体类型分层，层内按连接度再分高/低两档
+  strata:
+    - {name: person,       class: dbo:Person,       weight: 0.35}
+    - {name: work,         class: dbo:Work,         weight: 0.25}
+    - {name: organisation, class: dbo:Organisation, weight: 0.20}
+    - {name: place,        class: dbo:Place,        weight: 0.20}
+  degree_buckets: [low, high]
+  degree_split_quantile: 0.5
+  # 共享实体样本只用于桥接分析；实体总体重合率另用独立总体样本计算
+  # （验证计划 §2.3、任务书 §2.4）。
+  population_sample_size: 20000
+  population_sample_seed: 4242
+
+budget:
+  # 本机实测：50 GB 可用磁盘、1007 GiB 内存、128 核。
+  download_bytes_budget: 2000000000      # 2.0 GB，实际约 1.63 GB
+  disk_limit_gb: 40
+  mem_limit_gb: 512
+  time_limit_hours: 12
+  track_a_candidates: 1000               # 去重后候选目标
+  track_b_attempts: 5000                 # 最多尝试次数
+  max_workers: 32
+
+# ------------------------------------------------------------ 判定与指标口径
+judgement:
+  # 互斥状态；映射/事实/冲突问题在语法类型有效后发现时仍保留在主分母并单列
+  states: [strict_join, completion, single_graph, insufficient, conflict_invalid, unresolved]
+  # A* 非空且各单图结果均为空才计入 strict_join
+  strict_join_requires_all_singles_empty: true
+  # 查询超时单列为 unresolved，不作为不可回答证明
+  query_timeout_seconds: 60
+  # 等效答案归一化：实体去 URI 前缀后小写
+  answer_normalization: lowercase_localname
+
+metrics:
+  # 精度容差（浮点比较）
+  float_tolerance: 1.0e-9
+  # 空分母输出 null，不输出 0.0
+  empty_denominator_repr: null
+
+audit:
+  sample_size: 100                       # 不足则全选
+  diagnostic_size: 20                    # 失败/高风险样本，不并入质量估计
+  seed: 42
+  # 用户第二关复核用的另一个固定种子
+  review_seed: 20260911
+  human_status_initial: pending          # 未经人工审核不得填写通过/不通过
