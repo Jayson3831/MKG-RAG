@@ -64,6 +64,71 @@ def environment_info() -> Dict:
     }
 
 
+# ---------------------------------------------------------------- 输入校验
+
+def input_checksums(cfg: Config, project_root: str) -> Dict:
+    """运行开始时对**实际磁盘上的原始输入**重新计算 SHA-256。
+
+    任务书要求正式运行记录输入校验值。这里刻意不沿用下载阶段写在
+    outputs/prepare.json 里的结论，而是当场重算并与两处比对：冻结配置里
+    记录的字节数、下载阶段记录的 SHA-256。任一不符即视为输入与配置不一致，
+    运行必须中止——否则结论可能建立在与冻结配置不符的输入上却毫无痕迹。
+    """
+    from .prepare import raw_path
+    prev: Dict[str, Dict] = {}
+    pj = os.path.join(project_root, "outputs", "prepare.json")
+    if os.path.exists(pj):
+        try:
+            for e in util.read_json(pj).get("inputs", []):
+                prev[e["id"]] = e
+        except Exception:                                    # noqa: BLE001
+            pass
+
+    rows, bad = [], []
+    for inp in cfg.raw["inputs"]:
+        ids = ([f"{inp['id']}_{l}" for l in inp["langs"]] if inp["langs"]
+               else [inp["id"]])
+        for fid in ids:
+            lang = fid.rsplit("_", 1)[-1] if inp["langs"] else None
+            exp = (inp["bytes"].get(lang) if inp["langs"]
+                   else inp["bytes"].get("_single"))
+            path = raw_path(project_root, cfg.release_id, fid)
+            row = {"id": fid, "role": inp["role"], "lang": lang,
+                   "local_path": os.path.relpath(path, project_root),
+                   "url": prev.get(fid, {}).get("url"),
+                   "expected_bytes": exp}
+            if not os.path.exists(path):
+                row.update({"exists": False, "ok": False})
+                bad.append(fid)
+                rows.append(row)
+                continue
+            size = os.path.getsize(path)
+            sha = util.sha256_file(path)
+            psha = prev.get(fid, {}).get("sha256")
+            row.update({
+                "exists": True, "actual_bytes": size, "sha256": sha,
+                "bytes_match_config": exp is None or size == exp,
+                "sha256_matches_prepare": psha is None or psha == sha,
+                "prepare_sha256": psha,
+            })
+            row["ok"] = bool(row["bytes_match_config"]
+                             and row["sha256_matches_prepare"])
+            if not row["ok"]:
+                bad.append(fid)
+            rows.append(row)
+    return {
+        "verified_at": util.now_iso(),
+        "method": "运行时对磁盘文件逐文件重算 SHA-256，不使用下载阶段的缓存结论",
+        "n_files": len(rows),
+        "total_bytes": sum(r.get("actual_bytes", 0) for r in rows),
+        "total_gib": round(sum(r.get("actual_bytes", 0) for r in rows)
+                           / 1024 ** 3, 3),
+        "all_ok": not bad,
+        "mismatched": bad,
+        "files": rows,
+    }
+
+
 # ------------------------------------------------------------ 派生记录生成
 
 def normalization_records(cfg: Config, results: List[Dict],
@@ -175,6 +240,32 @@ def run(cfg: Config, project_root: str, run_dir: str,
     if meta["git"]["worktree_dirty"]:
         log(f"警告：工作区有未提交改动，本次 code_commit 不足以复现："
             f"{meta['git']['dirty_files']}")
+
+    # --- 输入校验（必须早于任何统计，不一致即中止）---
+    log("校验原始输入：对磁盘文件重算 SHA-256")
+    im = input_checksums(cfg, project_root)
+    util.write_json(os.path.join(run_dir, "inputs.json"), im)
+    log(f"输入校验 {im['n_files']} 个文件 {im['total_gib']} GiB："
+        + ("全部与冻结配置一致" if im["all_ok"]
+           else f"不一致 {im['mismatched']}"))
+    if not im["all_ok"]:
+        blocked = {
+            "experiment": cfg.raw["experiment"],
+            "run_dir": os.path.relpath(run_dir, project_root),
+            "started": meta["started"], "finished": util.now_iso(),
+            "code_commit": meta["git"]["code_commit"],
+            "status": "blocked_inputs",
+            "reason": ("原始输入与冻结配置不一致，按任务书要求中止，"
+                       "不产出任何统计结论"),
+            "mismatched": im["mismatched"],
+            "engineering_acceptance": {"status": "blocked", "checks_passed": 0,
+                                       "checks_total": 0},
+            "research_review": {"status": "not_started",
+                                "human_status": "pending"},
+        }
+        util.write_json(os.path.join(run_dir, "run-status.json"), blocked)
+        log(f"中止：输入不一致 {im['mismatched']}")
+        return blocked
 
     # --- 正确性检查（本次代码快照的真实输出）---
     log("执行正确性检查")
@@ -331,6 +422,13 @@ def run(cfg: Config, project_root: str, run_dir: str,
         "worktree_dirty": meta["git"]["worktree_dirty"],
         "config_sha256": cfg.digest,
         "release": cfg.release_id,
+        "inputs": {
+            "n_files": im["n_files"],
+            "total_gib": im["total_gib"],
+            "all_ok": im["all_ok"],
+            "method": im["method"],
+            "detail": "inputs.json",
+        },
         "engineering_acceptance": {
             "status": "completed" if chk["all_passed"] else "completed_with_failures",
             "checks_passed": chk["n_passed"],
@@ -435,7 +533,7 @@ def audit_export(cfg: Config, project_root: str, run_dir: str,
               "certificates.jsonl", "normalization-sample.jsonl", "checks.json",
               "metrics.json", "run-status.json", "manifest.json",
               "recomputed.json", "verify.json", "sampling.json",
-              "candidates.jsonl", "queries.jsonl"]
+              "candidates.jsonl", "queries.jsonl", "inputs.json"]
     entries, server_only = [], []
     # 全量标准化记录按 SFTP 规则不下载，固定在清单里说明，不靠「没列到」隐式排除。
     server_only = [{

@@ -84,8 +84,36 @@ def synthetic_root(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def smoke(synthetic_root, tmp_path_factory):
-    cfg = load_config(CONFIG)
+def smoke_cfg(synthetic_root, tmp_path_factory):
+    """与合成文件**实际字节数**一致的配置副本。
+
+    正式配置里 inputs[].bytes 记录的是真实 DBpedia 文件大小，而运行开始时会
+    当场重算磁盘字节并与之比对（pipeline.input_checksums），不符即中止。冒烟
+    测试因此必须用一份字节数诚实的配置副本，而不是让校验器对合成文件放行——
+    放行会让「输入与配置不一致就中止」这条路径永远得不到执行。
+    """
+    import copy
+
+    import yaml
+
+    raw = copy.deepcopy(load_config(CONFIG).raw)
+    for inp in raw["inputs"]:
+        keys = ([f"{inp['id']}_{l}" for l in inp["langs"]] if inp["langs"]
+                else [inp["id"]])
+        for fid in keys:
+            path = os.path.join(synthetic_root, "data", "raw", "e001",
+                                RELEASE, f"{fid}.ttl.bz2")
+            slot = fid.rsplit("_", 1)[-1] if inp["langs"] else "_single"
+            inp["bytes"][slot] = os.path.getsize(path)
+    p = tmp_path_factory.mktemp("cfg") / "e001.yaml"
+    p.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+                 encoding="utf-8")
+    return load_config(str(p))
+
+
+@pytest.fixture(scope="module")
+def smoke(smoke_cfg, synthetic_root, tmp_path_factory):
+    cfg = smoke_cfg
     prep = run_prepare(cfg, synthetic_root, skip_download=True)
     assert prep["status"] == "ok", prep
     run_dir = str(tmp_path_factory.mktemp("runs") / f"{RELEASE}_E001")
@@ -100,6 +128,27 @@ def test_prepare_builds_derived_views(smoke):
                  "labels_fr.tsv", "qid_map.tsv"):
         assert os.path.exists(os.path.join(base, name)), name
     assert prep["qid_map"]["qids_with_all_langs"] == 3
+
+
+def test_input_checksums_match_and_mismatch_is_detected(smoke_cfg, synthetic_root):
+    """运行时输入校验：一致时通过；字节数被改动时必须报不一致。
+
+    后半段是关键——若校验恒真，正式运行里「输入与冻结配置不符」就永远不会
+    暴露，而这正是它存在的唯一理由。
+    """
+    im = pipeline.input_checksums(smoke_cfg, synthetic_root)
+    assert im["all_ok"] and im["n_files"] == 11 and not im["mismatched"]
+
+    saved = smoke_cfg.raw["inputs"][0]["bytes"]["en"]
+    smoke_cfg.raw["inputs"][0]["bytes"]["en"] = saved + 1
+    try:
+        bad = pipeline.input_checksums(smoke_cfg, synthetic_root)
+    finally:
+        smoke_cfg.raw["inputs"][0]["bytes"]["en"] = saved
+    assert not bad["all_ok"]
+    assert bad["mismatched"] == ["mappingbased_objects_en"]
+    row = [r for r in bad["files"] if r["id"] == "mappingbased_objects_en"][0]
+    assert row["bytes_match_config"] is False and row["sha256"]
 
 
 def test_run_writes_all_required_artifacts(smoke):
