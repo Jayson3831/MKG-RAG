@@ -240,8 +240,15 @@ def run(cfg: Config, project_root: str, run_dir: str,
                            for c in ta["candidates"]]
 
     log("轨道 B：定向挖掘跨图路径")
-    tb = track_b(cfg, graphs, sampled,
-                 lambda c, idx: judge_one(cfg, graphs, align, c))
+    b_budget = cfg.raw["budget"]["track_b_attempts"]
+
+    def _judge_b(c: Dict, idx: int) -> Dict:
+        r = judge_one(cfg, graphs, align, c)
+        if idx % 200 == 0:
+            log(f"  轨道 B 判定 {idx}/{b_budget}")
+        return r
+
+    tb = track_b(cfg, graphs, sampled, _judge_b)
     b_qualified = list(tb["qualified"])      # track_b 已合并候选与判定结果
 
     # 合并账本：轨道 A 全部候选（含各类失败）+ 轨道 B 全部尝试。
@@ -278,8 +285,16 @@ def run(cfg: Config, project_root: str, run_dir: str,
     util.write_jsonl(os.path.join(run_dir, "queries.jsonl"), results)
     util.write_jsonl(os.path.join(run_dir, "certificates.jsonl"),
                      certificates(cfg, results))
-    util.write_jsonl(os.path.join(run_dir, "normalization.jsonl"),
-                     normalization_records(cfg, results, align))
+    norm = normalization_records(cfg, results, align)
+    util.write_jsonl(os.path.join(run_dir, "normalization.jsonl"), norm)
+    # 全量 normalization.jsonl 按 SFTP 规则留在服务器（体积大且可重算），
+    # 审核包只带一个小样本 + 源文件定位说明。
+    sample = norm[:20]
+    if sample:
+        sample = [dict(sample[0], sample_note=(
+            "本文件是全量 normalization.jsonl 的前 20 条样本；"
+            "完整文件保留在服务器运行目录，可按同一规则重算。"))] + sample[1:]
+    util.write_jsonl(os.path.join(run_dir, "normalization-sample.jsonl"), sample)
 
     # --- 审核包 ---
     log("导出审核包与诊断包")
@@ -414,11 +429,22 @@ def audit_export(cfg: Config, project_root: str, run_dir: str,
     out_dir = out_dir or os.path.join(project_root, "outputs", "review", rid)
     util.ensure_dir(out_dir)
 
+    # 完整候选账本与查询记录一并提供，不做「只交付成功案例」的截断；
+    # 超出体积上限时列为 server-only 并如实报告，而不是静默丢弃。
     wanted = ["audit-samples.html", "audit-selection.json", "audit.jsonl",
-              "certificates.jsonl", "normalization.jsonl", "checks.json",
+              "certificates.jsonl", "normalization-sample.jsonl", "checks.json",
               "metrics.json", "run-status.json", "manifest.json",
-              "recomputed.json", "verify.json", "sampling.json"]
+              "recomputed.json", "verify.json", "sampling.json",
+              "candidates.jsonl", "queries.jsonl"]
     entries, server_only = [], []
+    # 全量标准化记录按 SFTP 规则不下载，固定在清单里说明，不靠「没列到」隐式排除。
+    server_only = [{
+        "path": os.path.join(rid, "normalization.jsonl"),
+        "bytes": os.path.getsize(os.path.join(run_dir, "normalization.jsonl"))
+        if os.path.exists(os.path.join(run_dir, "normalization.jsonl")) else 0,
+        "reason": "全量标准化记录按 SFTP 规则留在服务器",
+        "note": ("审核包提供 normalization-sample.jsonl（前 20 条）；"
+                 "全量文件保留在服务器运行目录，未删除。")}]
     total = 0
     for name in wanted:
         src = os.path.join(run_dir, name)
@@ -459,7 +485,7 @@ def audit_export(cfg: Config, project_root: str, run_dir: str,
         "server_only": server_only,
         "server_only_note": ("以下内容按规则留在服务器，未纳入下载包："
                              "原始 .bz2 数据、全量派生视图（edges/types/labels/"
-                             "qid_map）、运行日志与环境。"),
+                             "qid_map）、全量 normalization.jsonl、运行日志与环境。"),
     }
     util.write_json(os.path.join(out_dir, "download-manifest.json"), manifest)
     # manifest 自身的哈希不含在 files 内（避免自指），由交付摘要记录
