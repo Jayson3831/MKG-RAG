@@ -191,6 +191,23 @@ def judge_candidate(cfg: Config, graphs: Dict[str, Graph], align: Alignment,
     any_truncated = False
     a_en_c, a_fr_c = singles_c.get("en", set()), singles_c.get("fr", set())
     direct_single = a_en_c >= a_star_c or a_fr_c >= a_star_c
+
+    # O(1) 预筛探针：任何命中的替代链都必须至少包含 A* 中的一个答案节点，
+    # 故先取一个 A* 答案在该图内的本地 IRI 作探针，逐链先做集合成员判断。
+    # 否则在答案集很大时（实测最重候选单次穷举保留约 1000 万节点），
+    # 每条替代链都要整体扫一遍做类型过滤与身份归一，等于白扫上千万个节点。
+    probes: Dict[str, Optional[str]] = {}
+    for lang in cfg.languages:
+        probe = None
+        for x in sorted(a_star_c):
+            loc = align.by_qid.get(x, {}).get(lang)
+            # 仅当该本地 IRI 归一后确实回到 x 时才可作探针：若同一本地 IRI 被
+            # 多个 QID 指涉，canon 未必回到 x，用它剪枝可能剪掉真命中。
+            if loc is not None and align.canon(lang, loc) == x:
+                probe = loc
+                break
+        probes[lang] = probe
+
     if search_on and not direct_single:
         # 某个单图已按模板链完整回答时，替代路径不可能改变分类，
         # 跳过穷举以把预算留给真正需要它的候选（否则纯属浪费）。
@@ -205,12 +222,18 @@ def judge_candidate(cfg: Config, graphs: Dict[str, Graph], align: Alignment,
                                                  rc["max_node_visits"])
             any_truncated = any_truncated or truncated
             alt_stats[lang] = st
+            probe = probes.get(lang)
             for alt_chain, ans in chains:
                 if alt_chain == chain:
                     continue          # 模板链本身已由单图查询覆盖
+                # 预筛是必要条件，不满足即不可能命中，直接跳过整条链的后续开销
+                if probe is not None and probe not in ans:
+                    continue
                 # 类型兼容：以实例类型实证检查替代链的实际答案是否具备模板
                 # 声明的目标类型，而不是只比较关系元数据（逆向跳无客体类型可查）。
                 if rc.get("require_type_compatible") and want_class:
+                    if probe is not None and not graphs[lang].has_class(probe, want_class):
+                        continue      # 探针答案本身不带目标类型，整条链不可能命中
                     typed = {x for x in ans if graphs[lang].has_class(x, want_class)}
                     if not typed:
                         continue

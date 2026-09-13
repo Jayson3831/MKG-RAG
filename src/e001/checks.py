@@ -160,6 +160,25 @@ def check_corrupt_input_counted_not_silent(cfg: Config) -> Tuple[bool, str]:
     return ok, f"bad={stats['bad']} triples={stats['triples']}"
 
 
+def check_unknown_necessity_widens_bounds(cfg: Config) -> Tuple[bool, str]:
+    """必要性未知的样本（unresolved 与 conflict_invalid）必须计入比率上界。
+
+    任务书 §7.7 要求映射/冲突类问题保留在主分母中且必要性视为未知。若上界
+    只按 unresolved 计算，冲突样本会被当成负例，低报区间上沿。
+    """
+    from .metrics import track_a_metrics
+    cands = [{"syntax_type_valid": True, "state": s} for s in
+             ("strict_join", "completion", "single_graph", "unresolved",
+              "conflict_invalid")]
+    m = track_a_metrics(cands)
+    ok = (m["n_unknown_necessity"] == 2
+          and m["R_multi_lower_bound_unknown_as_negative"] == 0.4
+          and m["R_multi_upper_bound_unknown_as_positive"] == 0.8)
+    return ok, (f"unknown={m['n_unknown_necessity']} "
+                f"[{m['R_multi_lower_bound_unknown_as_negative']}, "
+                f"{m['R_multi_upper_bound_unknown_as_positive']}]")
+
+
 def check_empty_denominator_is_null(cfg: Config) -> Tuple[bool, str]:
     """空分母输出 null，不输出 0，避免误导。"""
     ok = _ratio(0, 0) is None and _ratio(1, 0) is None and _ratio(1, 2) == 0.5
@@ -226,6 +245,36 @@ def check_alt_path_survives_removal(cfg: Config) -> Tuple[bool, str]:
                 f"after={after['state']}({len(after['alt_path_hits'])} hits)")
 
 
+def check_alt_probe_prefilter_keeps_hits(cfg: Config) -> Tuple[bool, str]:
+    """替代链的 O(1) 探针预筛不得漏掉真命中；答案无参考映射时须退化为完整检查。
+
+    构造的命中链是 3 跳（模板 2 跳 + extra_hops 1），且 A* 答案未在参考映射中，
+    因此走的是「探针不可用、退回完整检查」的分支——正是最容易因预筛写错而
+    静默丢命中的那条路径。
+    """
+    # 只映射影片与人物，答案地点不映射 -> 归一退化为 (语言, 本地名小写)
+    align = Alignment.from_map(["en", "fr"], {
+        Q_FILM: {"en": FILM, "fr": f"{FR}SomeFilm"},
+        Q_PERSON: {"en": PERSON_EN, "fr": PERSON_FR},
+    })
+    a_act, p_fr = f"{FR}SomeActor", f"{FR}SomeBirthplace"
+    en = _typed(Graph.from_triples("en", [
+        (FILM, "dbo:director", PERSON_EN, "iri")]), FILM, "dbo:Film")
+    fr = _typed(Graph.from_triples("fr", [
+        (PERSON_FR, "dbo:birthPlace", PLACE_FR, "iri"),        # 供联合查询第 2 跳
+        (f"{FR}SomeFilm", "dbo:author", a_act, "iri"),         # 3 跳替代链
+        (a_act, "dbo:birthPlace", p_fr, "iri"),
+        (p_fr, "dbo:location", PLACE_FR, "iri")]), PLACE_FR, "dbo:Place")
+    t = _template(["dbo:director", "dbo:birthPlace"], ["en", "fr"])
+    r = _judge(cfg, {"en": en, "fr": fr}, align, t,
+               {"en": FILM, "fr": f"{FR}SomeFilm"})
+    hits = r["alt_path_hits"]
+    ok = (r["state"] == "single_graph" and bool(hits)
+          and r["alt_check_status"] == "executed")
+    return ok, (f"state={r['state']} hits={len(hits)} "
+                f"chain={hits[0]['chain'] if hits else None}")
+
+
 def check_truncated_alt_search_not_strict_join(cfg: Config) -> Tuple[bool, str]:
     """替代路径穷举被预算截断时不得判 strict_join。
 
@@ -283,10 +332,12 @@ ALL_CHECKS = [
     ("labels_and_literals_not_answers", check_labels_and_literals_not_answers),
     ("mapping_missing_is_unresolved", check_mapping_missing_is_unresolved),
     ("corrupt_input_counted_not_silent", check_corrupt_input_counted_not_silent),
+    ("unknown_necessity_widens_bounds", check_unknown_necessity_widens_bounds),
     ("empty_denominator_is_null", check_empty_denominator_is_null),
     ("track_denominators_independent", check_track_denominators_independent),
     ("alt_path_flips_strict_join", check_alt_path_flips_strict_join),
     ("alt_path_survives_removal", check_alt_path_survives_removal),
+    ("alt_probe_prefilter_keeps_hits", check_alt_probe_prefilter_keeps_hits),
     ("truncated_alt_search_not_strict_join",
      check_truncated_alt_search_not_strict_join),
     ("consistency_error_detected", check_consistency_error_detected),

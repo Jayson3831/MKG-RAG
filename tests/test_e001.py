@@ -126,17 +126,22 @@ def test_track_a_metrics_counts_unresolved_separately():
         {"syntax_type_valid": True, "state": "strict_join"},
         {"syntax_type_valid": True, "state": "completion"},
         {"syntax_type_valid": True, "state": "single_graph"},
-        {"syntax_type_valid": True, "state": "unresolved"},
+        {"syntax_type_valid": True, "state": "unresolved",
+         "unresolved_kind": "mapping_missing"},
+        {"syntax_type_valid": True, "state": "conflict_invalid"},
         {"syntax_type_valid": False, "state": "strict_join"},
     ]
     m = track_a_metrics(cands)
-    assert m["denominator_valid_candidates"] == 4        # 无效候选不进主分母
+    assert m["denominator_valid_candidates"] == 5        # 无效候选不进主分母
     assert m["state_counts"]["strict_join"] == 1
     assert m["unfinished_unresolved"] == 1
-    assert m["R_multi"] == pytest.approx(0.5)
-    # 未决按正例计的上界高于按负例计的下界
-    assert m["R_multi_upper_bound_treating_unresolved_as_positive"] == \
-        pytest.approx(0.75)
+    assert m["R_multi"] == pytest.approx(0.4)
+    # 任务书 §7.7：unresolved 与 conflict_invalid 的多图必要性都视为未知，
+    # 上界必须把两者都按正例计。只算 unresolved 会得到 0.6，低报上沿。
+    assert m["n_unknown_necessity"] == 2
+    assert m["R_multi_lower_bound_unknown_as_negative"] == pytest.approx(0.4)
+    assert m["R_multi_upper_bound_unknown_as_positive"] == pytest.approx(0.8)
+    assert m["unresolved_by_kind"] == {"mapping_missing": 1}
 
 
 def test_track_a_metrics_null_when_no_valid_candidates():

@@ -47,6 +47,10 @@ def track_a_metrics(cands: List[Dict]) -> Dict:
     den = len(valid)
     joint_answerable = counts["strict_join"] + counts["completion"] + counts["single_graph"]
     unfinished = counts["unresolved"]
+    # 任务书 §7.7：映射、事实或冲突问题在语法/类型有效后发现时保留在主分母中，
+    # 其多图必要性视为**未知**，因此上下界必须同时覆盖 unresolved 与
+    # conflict_invalid——只把 unresolved 算进上界会低报区间上沿。
+    unknown = counts["unresolved"] + counts["conflict_invalid"]
     return {
         "denominator_valid_candidates": den,
         "n_raw_candidates": len(cands),
@@ -60,13 +64,16 @@ def track_a_metrics(cands: List[Dict]) -> Dict:
         "R_multi_among_joint_answerable_denominator": joint_answerable,
         "unfinished_unresolved": unfinished,
         "unresolved_by_kind": unresolved_kinds,
+        "n_unknown_necessity": unknown,
+        "unknown_necessity_states": ["unresolved", "conflict_invalid"],
         "verification_coverage": _ratio(den - unfinished, den),
-        # 未决项既非正例也非负例：给上下界
-        "R_multi_lower_bound_excluding_unresolved": _ratio(
+        # 必要性未知的样本既非正例也非负例：给上下界，区间随复核收敛
+        "R_multi_lower_bound_unknown_as_negative": _ratio(
             counts["strict_join"] + counts["completion"], den),
-        "R_multi_upper_bound_treating_unresolved_as_positive": _ratio(
-            counts["strict_join"] + counts["completion"] + unfinished, den),
-        "note": ("空分母为 null。未决项未计入正例，上下界在未决全部核实后收敛。"
+        "R_multi_upper_bound_unknown_as_positive": _ratio(
+            counts["strict_join"] + counts["completion"] + unknown, den),
+        "note": ("空分母为 null。unresolved 与 conflict_invalid 的必要性视为未知，"
+                 "既不计入正例也不排除在上界之外；上下界在全部核实后收敛。"
                  "该比率是给定采样分布下的发生率，不能外推为自然用户问题分布。"),
     }
 
