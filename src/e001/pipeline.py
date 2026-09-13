@@ -18,7 +18,8 @@ from . import checks as checks_mod
 from . import util
 from .config import Config
 from .graph import Alignment, Graph
-from .metrics import diversity_metrics, overlap_metrics, track_a_metrics
+from .metrics import (diversity_metrics, overlap_metrics, population_overlap,
+                      track_a_metrics)
 from .sample import build_shared_pool, population_sample, stratified_sample
 from .tracks import track_a, track_b
 
@@ -120,8 +121,10 @@ def certificates(cfg: Config, results: List[Dict]) -> List[Dict]:
             "alternative_paths": {
                 "status": r.get("alt_check_status"),
                 "truncated": r.get("alt_check_truncated", False),
+                "search_cost": r.get("alt_search_cost", {}),
                 "hits": r.get("alt_path_hits", []),
             },
+            "partial_single_answers": r.get("partial_single_answers", []),
             "unresolved_branches": r.get("unresolved_branches", 0),
             "consistency_error": r.get("consistency_error"),
             "reason": r.get("reason"),
@@ -261,7 +264,9 @@ def run(cfg: Config, project_root: str, run_dir: str,
                     "pass_rate": tb["pass_rate"],
                     "pass_rate_denominator": tb["pass_rate_denominator"],
                     "note": tb["note"]},
-        "overlap": overlap_metrics(cfg, pop, align_stats, graph_meta),
+        "overlap": overlap_metrics(cfg, pop, align_stats, graph_meta,
+                                   population_overlap(graphs, align, pop,
+                                                      cfg.languages)),
         "track_a_generation": {k: v for k, v in ta.items() if k != "candidates"},
     }
     util.write_json(os.path.join(run_dir, "metrics.json"), m)

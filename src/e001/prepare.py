@@ -20,6 +20,11 @@ RAW_SUBDIR = "data/raw/e001"
 PROC_SUBDIR = "data/processed/e001"
 
 
+def _p(msg: str) -> None:
+    """带时间戳的进度输出；长任务需要能从日志判断卡在哪一步。"""
+    print(f"[{util.now_iso()}] {msg}", flush=True)
+
+
 # ------------------------------------------------------------------ 下载
 
 def _download_one(url: str, dest: str, expect_bytes: int | None,
@@ -64,7 +69,10 @@ def download_inputs(cfg: Config, project_root: str) -> List[Dict]:
                 dest = os.path.join(raw_dir, f"{inp['id']}_{lang}.ttl.bz2")
                 url = f"{base}/{rel}"
                 exp = inp["bytes"].get(lang)
+                _p(f"下载 {inp['id']}_{lang} ({exp/1024/1024:.1f} MiB)")
                 rec = _download_one(url, dest, exp)
+                _p(f"  -> {inp['id']}_{lang} {rec['bytes']/1024/1024:.1f} MiB "
+                   f"{'ok' if rec['ok'] else '失败: ' + rec['note']}")
                 entries.append({
                     "id": f"{inp['id']}_{lang}", "role": inp["role"], "lang": lang,
                     "url": url, "local_path": os.path.relpath(dest, project_root),
@@ -75,7 +83,10 @@ def download_inputs(cfg: Config, project_root: str) -> List[Dict]:
             dest = os.path.join(raw_dir, f"{inp['id']}.ttl.bz2")
             url = f"{base}/{rel}"
             exp = inp["bytes"].get("_single")
+            _p(f"下载 {inp['id']} ({exp/1024/1024:.1f} MiB)")
             rec = _download_one(url, dest, exp)
+            _p(f"  -> {inp['id']} {rec['bytes']/1024/1024:.1f} MiB "
+               f"{'ok' if rec['ok'] else '失败: ' + rec['note']}")
             entries.append({
                 "id": inp["id"], "role": inp["role"], "lang": None,
                 "url": url, "local_path": os.path.relpath(dest, project_root),
@@ -265,10 +276,19 @@ def prepare(cfg: Config, project_root: str, skip_download: bool = False) -> Dict
     result["types"] = {}
     result["labels"] = {}
     for lang in cfg.languages:
+        _p(f"构建 {lang} 白名单出边视图")
         build_edges(cfg, project_root, lang, result["edges"])
+        _p(f"  -> {lang} edges: {result['edges'][lang]['total']}")
+        _p(f"构建 {lang} 类型视图")
         build_types(cfg, project_root, lang, result["types"])
+        _p(f"  -> {lang} types: {result['types'][lang]['total']}")
+        _p(f"构建 {lang} 标签视图")
         build_labels(cfg, project_root, lang, result["labels"])
+        _p(f"  -> {lang} labels: {result['labels'][lang]['total']}")
+    _p("构建 QID 参考映射（sameas-all-wikis，最大单文件）")
     build_qid_map(cfg, project_root, result)
+    _p(f"  -> qid_map: {result['qid_map']['qids_total']} 个 QID，"
+       f"{result['qid_map']['qids_with_all_langs']} 个含全部语言")
     result["status"] = "ok"
     result["finished"] = util.now_iso()
     return result

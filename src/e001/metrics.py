@@ -79,8 +79,50 @@ def track_b_metrics(tb: Dict) -> Dict:
     }
 
 
+def population_overlap(graphs: Dict, align, pop: Dict, langs: List[str]) -> Dict:
+    """实体总体重合估计。
+
+    做法：对每种语言，以其**全部实体**（未经任何共享条件筛选）构造身份集合，
+    再用另一语言的独立总体样本检查命中率。分母是对侧全量集合而非对侧样本，
+    因此该比率估计的是「某语言实体出现在另一语言的概率」，不受两侧样本量
+    不等或抽样比不同的影响。
+
+    映射缺失的实体只能落在自身语言一侧，会拉低命中率，故同时报告
+    有映射样本上的命中率，避免把「映射没覆盖」误读成「实体不重合」。
+    """
+    full = {}
+    for l in langs:
+        full[l] = {align.canon(l, x) for x in graphs[l].subjects()}
+    out = {
+        "estimator": "对侧全量身份集合 + 本语言独立总体样本",
+        "full_identity_set_sizes": {l: len(full[l]) for l in langs},
+        "note": ("不使用已按共享条件筛选的实体池。映射覆盖率低时，"
+                 "含未映射实体的比率会被低估，须与本字段一并解读。"),
+    }
+    for l in langs:
+        others = [o for o in langs if o != l]
+        if not others:
+            continue
+        other = others[0]
+        s = list(pop[l]["sample"])
+        mapped = [x for x in s if align.qid(l, x)]
+        hit = sum(1 for x in s if align.canon(l, x) in full[other])
+        hit_mapped = sum(1 for x in mapped
+                         if align.canon(l, x) in full[other])
+        out[f"{l}_in_{other}"] = {
+            "sample_size": len(s),
+            "sample_with_reference_mapping": len(mapped),
+            "sample_present_in_other": hit,
+            "containment_rate": _ratio(hit, len(s)),
+            "containment_rate_among_mapped": _ratio(hit_mapped, len(mapped)),
+            "containment_rate_denominator": len(s),
+            "containment_rate_among_mapped_denominator": len(mapped),
+        }
+    return out
+
+
 def overlap_metrics(cfg: Config, pop: Dict, align_stats: Dict,
-                    graphs_meta: Dict) -> Dict:
+                    graphs_meta: Dict, pop_overlap: Optional[Dict] = None) -> Dict:
     """实体/Schema/事实重合。分母均明确给出，未映射项单列。"""
     en = set(pop["en"]["sample"])
     fr = set(pop["fr"]["sample"])
@@ -93,6 +135,7 @@ def overlap_metrics(cfg: Config, pop: Dict, align_stats: Dict,
             "note": ("总体重合率须用完整实体清单或独立总体样本计算，"
                      "不得在已筛选的共享实体上估计（验证计划 §2.3）。"),
         },
+        "entity_population_overlap": pop_overlap,
         "alignment_coverage": align_stats,
         "graph_scale": graphs_meta,
     }

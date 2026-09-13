@@ -24,48 +24,54 @@ STATES = ("strict_join", "completion", "single_graph", "insufficient",
 REV = "-"
 
 
-def _step_fwd(graph: Graph, nodes: Set[str], rel_iri: str) -> Set[str]:
+def _step_fwd(graph: Graph, nodes: Set[str], rel: str) -> Set[str]:
     out = set()
     for n in nodes:
-        for rec in graph.out(n, rel_iri):
+        for rec in graph.out(n, rel):
             if rec[1] == "iri":
                 out.add(rec[0])
     return out
 
 
-def _step_rev(graph: Graph, nodes: Set[str], rel_iri: str) -> Set[str]:
+def _step_rev(graph: Graph, nodes: Set[str], rel: str) -> Set[str]:
     out = set()
     for n in nodes:
-        for rec in graph.incoming(n, rel_iri):
+        for rec in graph.incoming(n, rel):
             out.add(rec[0])
     return out
 
 
 def _live_chains(graph: Graph, root: str, rels: List[str], min_len: int,
-                 max_len: int, max_expansions: int):
+                 max_len: int, max_expansions: int, max_node_visits: int):
     """在单图内枚举所有「活跃」替代链。
 
     采用按前缀剪枝的 BFS：某前缀若求解为空，其任何扩展也必为空，
     因此可安全剪掉。逆关系（反向遍历）一并枚举，覆盖逆关系重写。
 
-    返回 (results, truncated)：
+    返回 (results, truncated, stats)：
       results    [(chain, answers)]，chain 元素为 'dbo:x'（正向）或 '-dbo:x'（逆向）
-      truncated  是否因 max_expansions 预算耗尽而截断
+      truncated  是否因预算耗尽而截断
+      stats      实际消耗，供审核判断结论是否完整
     """
     results: List[Tuple[List[str], Set[str]]] = []
     frontier: List[Tuple[Set[str], List[str]]] = [({root}, [])]
     expansions = 0
+    node_visits = 0
     truncated = False
     for _ in range(max_len):
         nxt: List[Tuple[Set[str], List[str]]] = []
         for nodes, hops in frontier:
             for rel in rels:
-                for sign, moved in (("", _step_fwd(graph, nodes, rel)),
-                                    (REV, _step_rev(graph, nodes, rel))):
+                for sign, step in (("", _step_fwd), (REV, _step_rev)):
+                    # 预算检查必须在真正展开之前：单次展开若落在超大节点集合上，
+                    # 事后计数无法阻止它跑完。
                     expansions += 1
-                    if expansions > max_expansions:
+                    node_visits += len(nodes)
+                    if (expansions > max_expansions
+                            or node_visits > max_node_visits):
                         truncated = True
                         break
+                    moved = step(graph, nodes, rel)
                     if not moved:
                         continue
                     # rel 与 graph 的谓词键同为 curie（如 dbo:birthPlace）
@@ -80,7 +86,8 @@ def _live_chains(graph: Graph, root: str, rels: List[str], min_len: int,
         if truncated or not nxt:
             break
         frontier = nxt
-    return results, truncated
+    return results, truncated, {"expansions": expansions,
+                                "node_visits": node_visits}
 
 
 def _target_class(cfg: Config, chain: List[str]) -> Optional[str]:
@@ -178,17 +185,24 @@ def judge_candidate(cfg: Config, graphs: Dict[str, Graph], align: Alignment,
 
     # --- 替代路径复核（在判定 strict_join 之前必须执行）---
     alt_hits: List[Dict] = []
+    alt_stats: Dict[str, Dict] = {}
     any_truncated = False
-    if search_on:
+    a_en_c, a_fr_c = singles_c.get("en", set()), singles_c.get("fr", set())
+    direct_single = a_en_c >= a_star_c or a_fr_c >= a_star_c
+    if search_on and not direct_single:
+        # 某个单图已按模板链完整回答时，替代路径不可能改变分类，
+        # 跳过穷举以把预算留给真正需要它的候选（否则纯属浪费）。
         min_len = len(chain)
         up = min(max_len, len(chain) + extra)
         for lang in cfg.languages:
             ri = root_iris.get(lang)
             if ri is None:
                 continue
-            chains, truncated = _live_chains(graphs[lang], ri, rels,
-                                             min_len, up, max_exp)
+            chains, truncated, st = _live_chains(graphs[lang], ri, rels,
+                                                 min_len, up, max_exp,
+                                                 rc["max_node_visits"])
             any_truncated = any_truncated or truncated
+            alt_stats[lang] = st
             for alt_chain, ans in chains:
                 if alt_chain == chain:
                     continue          # 模板链本身已由单图查询覆盖
@@ -208,13 +222,17 @@ def judge_candidate(cfg: Config, graphs: Dict[str, Graph], align: Alignment,
         out["alt_check_truncated"] = any_truncated
         out["alt_path_hits"] = alt_hits[:20]
         out["alt_paths_searched"] = True
-    else:
+        out["alt_search_cost"] = alt_stats
+    elif not search_on:
         out["alt_check_status"] = "not_implemented"
+    else:
+        # 单图已直接完整回答，无需穷举；不是「已排除全部替代路径」的断言
+        out["alt_check_status"] = "not_needed_direct_single_graph"
+        out["alt_paths_searched"] = False
 
     # --- 分类（互斥）---
-    a_en_c, a_fr_c = singles_c.get("en", set()), singles_c.get("fr", set())
     out["partial_single_answers"] = sorted((a_en_c | a_fr_c) & a_star_c)
-    if a_en_c >= a_star_c or a_fr_c >= a_star_c:
+    if direct_single:
         out["state"] = "single_graph"
         out["reason"] = "至少一个单图足以完整支持 A*"
     elif alt_hits:
