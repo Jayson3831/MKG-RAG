@@ -533,7 +533,10 @@ def audit_export(cfg: Config, project_root: str, run_dir: str,
               "certificates.jsonl", "normalization-sample.jsonl", "checks.json",
               "metrics.json", "run-status.json", "manifest.json",
               "recomputed.json", "verify.json", "sampling.json",
-              "candidates.jsonl", "queries.jsonl", "inputs.json"]
+              "candidates.jsonl", "queries.jsonl", "inputs.json",
+              # 交付总结与复核材料：运行后写入运行目录，属审核产物，
+              # 一并列入下载清单；缺失时跳过，不影响其余产物。
+              "delivery-summary.md", "review-conflict-invalid.json"]
     entries, server_only = [], []
     # 全量标准化记录按 SFTP 规则不下载，固定在清单里说明，不靠「没列到」隐式排除。
     server_only = [{
