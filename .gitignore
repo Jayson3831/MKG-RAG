@@ -9,7 +9,9 @@ __pycache__/
 /outputs/runs/
 /outputs/incoming/
 /outputs/archives/
-/.vscode/sftp.json
+# 编辑器本地配置（含本机解释器路径），不入库：否则每次正式运行都会因
+# 未跟踪的 .vscode/settings.json 被标记为 dirty，使 code_commit 失去复现意义。
+/.vscode/
 
 # Remote data, runtime artifacts, environments and credentials stay out of Git.
 /data/
